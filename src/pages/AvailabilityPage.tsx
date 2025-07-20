@@ -1,5 +1,3 @@
-"use client"
-
 import { useState } from "react"
 import { Button } from "../components/ui/button"
 import { Label } from "../components/ui/label"
@@ -8,14 +6,43 @@ import { Alert, AlertDescription } from "../components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select"
 import { Search, Calendar, Building2 } from "lucide-react"
 import { useHalls } from "@/contexts/useHall"
-import { Get } from "@/utils/https"
 
 // Add this helper function after the imports and before the component
 const formatDateTime = (dateTimeString: string) => {
   if (!dateTimeString) return "N/A"
 
   try {
-    const date = new Date(dateTimeString)
+    let date: Date
+
+    // Handle different date formats from your API
+    if (dateTimeString.includes("-") && dateTimeString.includes(":")) {
+      // Format: "2025-07-15 09:00:00" or "7-11-2025 14:00"
+      let normalizedDate = dateTimeString
+
+      // Convert "7-11-2025 14:00" to "2025-11-07 14:00:00"
+      if (dateTimeString.match(/^\d{1,2}-\d{1,2}-\d{4}/)) {
+        const parts = dateTimeString.split(" ")
+        const datePart = parts[0]
+        const timePart = parts[1] || "00:00"
+
+        const [month, day, year] = datePart.split("-")
+        normalizedDate = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")} ${timePart}`
+
+        // Add seconds if not present
+        if (!normalizedDate.includes(":00:00") && normalizedDate.split(":").length === 2) {
+          normalizedDate += ":00"
+        }
+      }
+
+      // Add seconds if not present for standard format
+      if (!normalizedDate.includes(":00:00") && normalizedDate.split(":").length === 2) {
+        normalizedDate += ":00"
+      }
+
+      date = new Date(normalizedDate)
+    } else {
+      date = new Date(dateTimeString)
+    }
 
     // Check if the date is valid
     if (isNaN(date.getTime())) {
@@ -38,10 +65,59 @@ const formatDateTime = (dateTimeString: string) => {
   }
 }
 
+const calculateDuration = (startTime: string, endTime: string) => {
+  try {
+    const start = new Date(
+      startTime.includes("-") && startTime.includes(":")
+        ? startTime.match(/^\d{1,2}-\d{1,2}-\d{4}/)
+          ? (() => {
+              const parts = startTime.split(" ")
+              const datePart = parts[0]
+              const timePart = parts[1] || "00:00"
+              const [month, day, year] = datePart.split("-")
+              return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")} ${timePart}:00`
+            })()
+          : startTime + (startTime.split(":").length === 2 ? ":00" : "")
+        : startTime,
+    )
+
+    const end = new Date(
+      endTime.includes("-") && endTime.includes(":")
+        ? endTime.match(/^\d{1,2}-\d{1,2}-\d{4}/)
+          ? (() => {
+              const parts = endTime.split(" ")
+              const datePart = parts[0]
+              const timePart = parts[1] || "00:00"
+              const [month, day, year] = datePart.split("-")
+              return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")} ${timePart}:00`
+            })()
+          : endTime + (endTime.split(":").length === 2 ? ":00" : "")
+        : endTime,
+    )
+
+    const diffMs = end.getTime() - start.getTime()
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
+
+    if (diffHours > 0 && diffMinutes > 0) {
+      return `${diffHours}h ${diffMinutes}m`
+    } else if (diffHours > 0) {
+      return `${diffHours}h`
+    } else if (diffMinutes > 0) {
+      return `${diffMinutes}m`
+    } else {
+      return "0m"
+    }
+  } catch (error) {
+    console.log(error)
+    return "N/A"
+  }
+}
+
 export default function AvailabilityPage() {
   const { halls, loading: hallsLoading } = useHalls()
   const [selectedHallId, setSelectedHallId] = useState<string>("")
-  const [availabilityResult, setAvailabilityResult] = useState<{ start_time: string; end_time: string; is_available: boolean } | null>(null)
+  const [availabilityResult, setAvailabilityResult] = useState<{ start_time: string; end_time: string; }[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -55,11 +131,9 @@ export default function AvailabilityPage() {
     setLoading(true)
     setError(null)
     try {
-      const response = await Get(`${baseURL}/halls/${selectedHallId}/availability`, setLoading)
-      if (response.err) {
-        throw response.err
-      }
-      setAvailabilityResult(response.data)
+      const res = await fetch(`${baseURL}/halls/${selectedHallId}/availability`)
+      const data = await res.json()
+      setAvailabilityResult(data)
     } catch (error) {
       console.log(error)
       setError("Failed to check availability")
@@ -152,69 +226,173 @@ export default function AvailabilityPage() {
                     <div className="flex items-center gap-2">
                       <div className="w-3 h-3 bg-green-500 rounded-full"></div>
                       <span className="font-medium text-green-800">
-                        {availabilityResult.available !== false ? "Available" : "Not Available"}
+                        {Array.isArray(availabilityResult) && availabilityResult.length > 0
+                          ? `${availabilityResult.length} Booking${availabilityResult.length > 1 ? "s" : ""} Found`
+                          : "No Current Bookings"}
                       </span>
                     </div>
                   </div>
 
-                  {/* Current Bookings */}
-                  {availabilityResult.bookings && availabilityResult.bookings.length > 0 && (
+                  {/* Handle Array Response */}
+                  {Array.isArray(availabilityResult) && availabilityResult.length > 0 && (
                     <div className="space-y-3">
                       <h4 className="font-semibold text-slate-700 flex items-center gap-2">
                         <Calendar className="h-4 w-4" />
-                        Current Bookings
+                        Scheduled Bookings ({availabilityResult.length})
                       </h4>
-                      <div className="space-y-2">
-
-                        {availabilityResult.bookings.map((booking: {
-                          start_time: string
-                          end_time: string
-                          purpose?: string
-                          user_id?: string
-                        }, index: number) => (
-                          <div key={index} className="p-3 bg-slate-50 rounded-lg border">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                              <div>
-                                <span className="font-medium text-slate-600">Start:</span>
-                                <span className="ml-2 text-slate-800">{formatDateTime(booking.start_time)}</span>
+                      <div className="space-y-3">
+                        {availabilityResult.map((booking: { start_time: string; end_time: string; purpose?: string; user_id?: string }, index: number) => (
+                          <div
+                            key={index}
+                            className="p-4 bg-white rounded-lg border border-slate-200 shadow-sm hover:shadow-md transition-shadow"
+                          >
+                            <div className="flex items-start justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                                <span className="font-medium text-slate-800">Booking #{index + 1}</span>
                               </div>
-                              <div>
-                                <span className="font-medium text-slate-600">End:</span>
-                                <span className="ml-2 text-slate-800">{formatDateTime(booking.end_time)}</span>
-                              </div>
-                              {booking.purpose && (
-                                <div className="md:col-span-2">
-                                  <span className="font-medium text-slate-600">Purpose:</span>
-                                  <span className="ml-2 text-slate-800">{booking.purpose}</span>
-                                </div>
-                              )}
-                              {booking.user_id && (
-                                <div>
-                                  <span className="font-medium text-slate-600">User ID:</span>
-                                  <span className="ml-2 text-slate-800">{booking.user_id}</span>
-                                </div>
-                              )}
+                              <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
+                                {calculateDuration(booking.start_time, booking.end_time)}
+                              </span>
                             </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-4 h-4 rounded bg-green-100 flex items-center justify-center">
+                                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                  </div>
+                                  <div>
+                                    <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">
+                                      Start Time
+                                    </span>
+                                    <div className="text-sm font-medium text-slate-800">
+                                      {formatDateTime(booking.start_time)}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-4 h-4 rounded bg-red-100 flex items-center justify-center">
+                                    <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                                  </div>
+                                  <div>
+                                    <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">
+                                      End Time
+                                    </span>
+                                    <div className="text-sm font-medium text-slate-800">
+                                      {formatDateTime(booking.end_time)}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {booking.purpose && (
+                              <div className="mt-3 pt-3 border-t border-slate-100">
+                                <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">
+                                  Purpose
+                                </span>
+                                <div className="text-sm text-slate-700 mt-1">{booking.purpose}</div>
+                              </div>
+                            )}
+
+                            {booking.user_id && (
+                              <div className="mt-2">
+                                <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">
+                                  User ID
+                                </span>
+                                <div className="text-sm text-slate-700 mt-1">{booking.user_id}</div>
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
                     </div>
                   )}
 
+                  {/* Handle Object Response with bookings array */}
+                  {!Array.isArray(availabilityResult) &&
+                    typeof availabilityResult === 'object' &&
+                    availabilityResult !== null &&
+                    'bookings' in availabilityResult &&
+                    Array.isArray((availabilityResult as { bookings: Array<{ start_time: string; end_time: string; purpose?: string; user_id?: string }> }).bookings) &&
+                    (availabilityResult as { bookings: Array<{ start_time: string; end_time: string; purpose?: string; user_id?: string }> }).bookings.length > 0 && (
+                      <div className="space-y-3">
+                        <h4 className="font-semibold text-slate-700 flex items-center gap-2">
+                          <Calendar className="h-4 w-4" />
+                          Current Bookings
+                        </h4>
+                        <div className="space-y-2">
+                          {(availabilityResult as { bookings: Array<{ start_time: string; end_time: string; purpose?: string; user_id?: string }> }).bookings.map((booking, index) => (
+                            <div key={index} className="p-3 bg-slate-50 rounded-lg border">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                                <div>
+                                  <span className="font-medium text-slate-600">Start:</span>
+                                  <span className="ml-2 text-slate-800">{formatDateTime(booking.start_time)}</span>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-slate-600">End:</span>
+                                  <span className="ml-2 text-slate-800">{formatDateTime(booking.end_time)}</span>
+                                </div>
+                                {booking.purpose && (
+                                  <div className="md:col-span-2">
+                                    <span className="font-medium text-slate-600">Purpose:</span>
+                                    <span className="ml-2 text-slate-800">{booking.purpose}</span>
+                                  </div>
+                                )}
+                                {booking.user_id && (
+                                  <div>
+                                    <span className="font-medium text-slate-600">User ID:</span>
+                                    <span className="ml-2 text-slate-800">{booking.user_id}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                   {/* No Bookings Message */}
-                  {availabilityResult.bookings && availabilityResult.bookings.length === 0 && (
+                  {((Array.isArray(availabilityResult) && availabilityResult.length === 0) ||
+                    (!Array.isArray(availabilityResult) &&
+                      typeof availabilityResult === 'object' &&
+                      availabilityResult !== null &&
+                      'bookings' in availabilityResult &&
+                      Array.isArray((availabilityResult as { bookings: Array<{ start_time: string; end_time: string; purpose?: string; user_id?: string }> }).bookings) &&
+                      (availabilityResult as { bookings: Array<{ start_time: string; end_time: string; purpose?: string; user_id?: string }> }).bookings.length === 0)) && (
                     <div className="p-4 rounded-lg border-l-4 border-blue-500 bg-blue-50">
                       <div className="flex items-center gap-2">
                         <Calendar className="h-4 w-4 text-blue-600" />
-                        <span className="text-blue-800">No current bookings for this hall</span>
+                        <span className="text-blue-800">
+                          No current bookings for this hall - Available for booking!
+                        </span>
                       </div>
                     </div>
                   )}
 
                   {/* Additional Information */}
-                  {availabilityResult.message && (
+                  {!Array.isArray(availabilityResult) &&
+                    typeof availabilityResult === 'object' &&
+                    availabilityResult !== null &&
+                    'message' in availabilityResult && (
                     <div className="p-3 bg-gray-50 rounded-lg">
-                      <span className="text-sm text-gray-700">{availabilityResult.message}</span>
+                      <span className="text-sm text-gray-700">{(availabilityResult as { message: string }).message}</span>
+                    </div>
+                  )}
+
+                  {/* Summary Card */}
+                  {Array.isArray(availabilityResult) && availabilityResult.length > 0 && (
+                    <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+                      <h5 className="font-medium text-blue-900 mb-2">Booking Summary</h5>
+                      <div className="text-sm text-blue-800">
+                        <p>• Total bookings: {availabilityResult.length}</p>
+                        <p>• Hall: {selectedHall?.name}</p>
+                        <p>• Capacity: {selectedHall?.capacity} people</p>
+                      </div>
                     </div>
                   )}
 
